@@ -1,0 +1,16 @@
+# Build outputs
+bin/
+obj/
+
+# Local configuration (secrets, URLs personnels)
+*.Local.json
+*.local.json
+
+# IDE
+.idea/
+.vs/
+*.user
+
+# OS
+.DS_Store
+Thumbs.db

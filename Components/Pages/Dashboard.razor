@@ -1,0 +1,617 @@
+@page "/"
+@rendermode InteractiveServer
+@inject DashboardService DashboardSvc
+@implements IAsyncDisposable
+
+<div class="dashboard">
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <span class="logo-icon">◈</span>
+                <span class="logo-text">Azure<strong>Watcher</strong></span>
+            </div>
+            @if (DashboardSvc.LastRefresh.HasValue)
+            {
+                <span class="last-refresh">updated @DashboardSvc.LastRefresh.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+            }
+        </div>
+        <div class="header-right">
+            @if (!DashboardSvc.IsAuthenticated)
+            {
+                <button class="btn btn-primary" @onclick="InitDashboard" disabled="@DashboardSvc.IsLoading">
+                    @if (DashboardSvc.IsLoading)
+                    {
+                        <span class="spinner"></span><span>Connecting...</span>
+                    }
+                    else
+                    {
+                        <span>🔐 Sign in to Azure</span>
+                    }
+                </button>
+            }
+            else
+            {
+                <div class="polling-badge @(DashboardSvc.IsLoading ? "polling-badge--active" : "")">
+                    <span class="pulse-dot"></span>
+                    <span>Auto-refresh 30s</span>
+                </div>
+                <button class="btn btn-ghost" @onclick="ForceRefresh" disabled="@DashboardSvc.IsLoading">
+                    ↻ Refresh
+                </button>
+                <button class="btn @(PrivacyMode ? "btn-primary" : "btn-ghost")" @onclick="() => PrivacyMode = !PrivacyMode" title="@(PrivacyMode ? "Afficher les informations" : "Masquer les informations confidentielles")">
+                    @(PrivacyMode ? "🔒 Privé" : "👁 Masquer")
+                </button>
+            }
+        </div>
+    </header>
+
+    <!-- Error banner -->
+    @if (DashboardSvc.ErrorMessage != null)
+    {
+        <div class="error-banner">⚠ @DashboardSvc.ErrorMessage</div>
+    }
+
+    @if (!DashboardSvc.IsAuthenticated && !DashboardSvc.IsLoading)
+    {
+        <div class="landing">
+            <div class="landing-icon">◈</div>
+            <h1>Azure Dashboard</h1>
+            <p>Centralized monitoring of all your Application Insights resources across all your Azure subscriptions.</p>
+            <button class="btn btn-primary btn-large" @onclick="InitDashboard">
+                🔐 Sign in with your Azure account
+            </button>
+            <p class="landing-note">A browser window will open for Microsoft authentication.</p>
+        </div>
+    }
+    else if (DashboardSvc.IsAuthenticated)
+    {
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab-btn @(ActiveTab == Tab.Insights ? "tab-btn--active" : "")" @onclick="() => ActiveTab = Tab.Insights">
+                <span class="tab-icon">◈</span>
+                <span>Insights</span>
+                <span class="tab-badge tab-badge--critical">@DashboardSvc.CriticalCount</span>
+            </button>
+            <button class="tab-btn @(ActiveTab == Tab.Pipelines ? "tab-btn--active" : "")" @onclick="() => ActiveTab = Tab.Pipelines">
+                <span class="tab-icon">⬡</span>
+                <span>Pipelines</span>
+                @if (DashboardSvc.FailedPipelinesCount > 0)
+                {
+                    <span class="tab-badge tab-badge--critical">@DashboardSvc.FailedPipelinesCount</span>
+                }
+            </button>
+            <button class="tab-btn @(ActiveTab == Tab.PullRequests ? "tab-btn--active" : "")" @onclick="() => ActiveTab = Tab.PullRequests">
+                <span class="tab-icon">⤴</span>
+                <span>Pull Requests</span>
+                @if (DashboardSvc.PullRequests.Any())
+                {
+                    <span class="tab-badge tab-badge--accent">@DashboardSvc.PullRequests.Count</span>
+                }
+            </button>
+        </nav>
+
+        <!-- ── Tab: Insights ── -->
+        @if (ActiveTab == Tab.Insights)
+        {
+            <div class="summary-bar">
+                <div class="summary-card summary-card--critical">
+                    <span class="summary-count">@DashboardSvc.CriticalCount</span>
+                    <span class="summary-label">Critical</span>
+                </div>
+                <div class="summary-card summary-card--warning">
+                    <span class="summary-count">@DashboardSvc.WarningCount</span>
+                    <span class="summary-label">Warning</span>
+                </div>
+                <div class="summary-card summary-card--healthy">
+                    <span class="summary-count">@DashboardSvc.HealthyCount</span>
+                    <span class="summary-label">OK</span>
+                </div>
+                <div class="summary-card summary-card--total">
+                    <span class="summary-count">@DashboardSvc.Resources.Count</span>
+                    <span class="summary-label">Total</span>
+                </div>
+            </div>
+
+            <div class="controls-bar">
+                <div class="search-box">
+                    <span class="search-icon">⌕</span>
+                    <input type="text" placeholder="Filter by name, resource group, subscription, region..."
+                           @bind="SearchTerm" @bind:event="oninput" class="search-input" />
+                </div>
+                <div class="filter-chips">
+                    <button class="chip @(StatusFilter == null ? "chip--active" : "")" @onclick="() => StatusFilter = null">All</button>
+                    <button class="chip chip--critical @(StatusFilter == HealthStatus.Critical ? "chip--active" : "")" @onclick="() => StatusFilter = HealthStatus.Critical">🔴 Critical</button>
+                    <button class="chip chip--warning @(StatusFilter == HealthStatus.Warning ? "chip--active" : "")" @onclick="() => StatusFilter = HealthStatus.Warning">🟡 Warning</button>
+                    <button class="chip chip--healthy @(StatusFilter == HealthStatus.Healthy ? "chip--active" : "")" @onclick="() => StatusFilter = HealthStatus.Healthy">🟢 OK</button>
+                </div>
+                <select class="sort-select" @bind="SortField">
+                    <option value="status">Sort by status</option>
+                    <option value="name">Name</option>
+                    <option value="errors">Errors</option>
+                    <option value="subscription">Subscription</option>
+                </select>
+                <select class="sort-select" @bind="GroupBy">
+                    <option value="none">No grouping</option>
+                    <option value="subscription">By subscription</option>
+                    <option value="status">By status</option>
+                </select>
+                <div class="view-toggle">
+                    <button class="view-btn @(ViewMode == "detailed" ? "view-btn--active" : "")"
+                            @onclick='() => ViewMode = "detailed"'>⊞ Detailed</button>
+                    <button class="view-btn @(ViewMode == "compact" ? "view-btn--active" : "")"
+                            @onclick='() => { ViewMode = "compact"; SelectedResource = null; }'>☰ Compact</button>
+                </div>
+            </div>
+
+            <!-- Floating sidebar -->
+            @if (SelectedResource != null)
+            {
+                <div class="sidebar-backdrop" @onclick="() => SelectedResource = null"></div>
+                <aside class="sidebar">
+                    <div class="sidebar-header">
+                        <div class="status-indicator status-indicator--@SelectedResource.Status.ToString().ToLower()"></div>
+                        <div class="sidebar-title">
+                            <span class="sidebar-name">@P(SelectedResource.Name)</span>
+                            <span class="sidebar-sub">@P(SelectedResource.ResourceGroup) · @P(SelectedResource.SubscriptionName) · @P(SelectedResource.Location)</span>
+                        </div>
+                        <button class="sidebar-close" @onclick="() => SelectedResource = null">✕</button>
+                    </div>
+                    <div class="sidebar-body">
+                        @if (SelectedResource.Metrics != null)
+                        {
+                        <div class="sidebar-metrics">
+                            <div class="sidebar-metric">
+                                <span class="metric-label">Failed requests</span>
+                                <span class="metric-value metric-value--@(SelectedResource.Metrics.FailedRequestsLast5Min > 0 ? "bad" : "good")">
+                                    @SelectedResource.Metrics.FailedRequestsLast5Min.ToString("N0")
+                                </span>
+                            </div>
+                            <div class="sidebar-metric">
+                                <span class="metric-label">Failure rate</span>
+                                <span class="metric-value metric-value--@(SelectedResource.Metrics.FailureRate > 5 ? "bad" : "good")">
+                                    @SelectedResource.Metrics.FailureRate.ToString("N1")%
+                                </span>
+                            </div>
+                            <div class="sidebar-metric">
+                                <span class="metric-label">Exceptions (1h)</span>
+                                <span class="metric-value">
+                                    @SelectedResource.Metrics.ExceptionsLast5Min.ToString("N0")
+                                    <span class="trend trend--@SelectedResource.Metrics.ExceptionTrend.ToString().ToLower()">
+                                        @TrendIcon(SelectedResource.Metrics.ExceptionTrend)
+                                    </span>
+                                </span>
+                            </div>
+                        </div>
+                        @if (SelectedResource.Metrics.ExceptionHistory.Any())
+                        {
+                            <div class="sparkline-container sidebar-chart">
+                                <span class="sparkline-label">Exceptions — 24h</span>
+                                <svg class="sparkline sidebar-sparkline" viewBox="0 0 120 30" preserveAspectRatio="none">
+                                    @foreach (var bar in BuildBars(SelectedResource.Metrics.ExceptionHistory))
+                                    {
+                                        <rect x="@bar.X" y="@bar.Y" width="@bar.W" height="@bar.H" fill="#ef4444" />
+                                    }
+                                </svg>
+                            </div>
+                        }
+                        <div class="sidebar-footer">
+                            <span class="updated-at">↻ @SelectedResource.Metrics.LastUpdated.ToLocalTime().ToString("HH:mm:ss")</span>
+                            <a href="https://portal.azure.com/#resource@(SelectedResource.Id)/overview"
+                               target="_blank" class="portal-link">View in Azure ↗</a>
+                        </div>
+                        }
+                        else
+                        {
+                            <div class="card-loading">
+                                <span class="spinner"></span>
+                                <span>Loading metrics...</span>
+                            </div>
+                        }
+                    </div>
+                </aside>
+            }
+
+            <div class="insights-layout">
+                <!-- Main grid -->
+                <div class="insights-content">
+                    @foreach (var section in DisplaySections)
+                    {
+                        <div class="@(section.Header != null ? "subscription-group" : "")">
+                            @if (section.Header != null)
+                            {
+                                <div class="subscription-header">
+                                    <span class="subscription-icon">@(GroupBy == "subscription" ? "☁" : "")</span>
+                                    <span class="subscription-name">@(GroupBy == "subscription" ? P(section.Header) : section.Header)</span>
+                                    <span class="subscription-count">@(section.Resources.Count()) resources</span>
+                                </div>
+                            }
+                            @if (ViewMode == "compact")
+                            {
+                                <div class="resources-grid">
+                                    @foreach (var resource in section.Resources)
+                                    {
+                                        <div class="resource-card resource-card--@resource.Status.ToString().ToLower() resource-card--compact @(SelectedResource == resource ? "card--selected" : "")"
+                                             @onclick="() => SelectedResource = resource">
+                                            <div class="card-header">
+                                                <div class="status-indicator status-indicator--@resource.Status.ToString().ToLower()"></div>
+                                                <div class="card-title">
+                                                    <span class="resource-name">@P(resource.ResourceGroup)</span>
+                                                    <span class="resource-rg">@P(resource.Name)</span>
+                                                </div>
+                                                <span class="resource-location">@P(resource.Location)</span>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="resources-grid">
+                                    @foreach (var resource in section.Resources)
+                                    {
+                                        <div class="resource-card resource-card--@resource.Status.ToString().ToLower() @(SelectedResource == resource ? "card--selected" : "")"
+                                             @onclick="() => SelectedResource = resource" style="cursor:pointer">
+                                            <div class="card-header">
+                                                <div class="status-indicator status-indicator--@resource.Status.ToString().ToLower()"></div>
+                                                <div class="card-title">
+                                                    <span class="resource-name">@P(resource.ResourceGroup)</span>
+                                                    <span class="resource-rg">@P(resource.Name)</span>
+                                                </div>
+                                                <span class="resource-location">@P(resource.Location)</span>
+                                            </div>
+                                            @if (resource.Metrics != null)
+                                            {
+                                                <div class="card-metrics">
+                                                    <div class="metric">
+                                                        <span class="metric-label">Failed requests</span>
+                                                        <span class="metric-value metric-value--@(resource.Metrics.FailedRequestsLast5Min > 0 ? "bad" : "good")">
+                                                            @resource.Metrics.FailedRequestsLast5Min.ToString("N0")
+                                                        </span>
+                                                    </div>
+                                                    <div class="metric">
+                                                        <span class="metric-label">Failure rate</span>
+                                                        <span class="metric-value metric-value--@(resource.Metrics.FailureRate > 5 ? "bad" : "good")">
+                                                            @resource.Metrics.FailureRate.ToString("N1")%
+                                                        </span>
+                                                    </div>
+                                                    <div class="metric">
+                                                        <span class="metric-label">Exceptions (1h)</span>
+                                                        <span class="metric-value">
+                                                            @resource.Metrics.ExceptionsLast5Min.ToString("N0")
+                                                            <span class="trend trend--@resource.Metrics.ExceptionTrend.ToString().ToLower()">
+                                                                @TrendIcon(resource.Metrics.ExceptionTrend)
+                                                            </span>
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                @if (resource.Metrics.ExceptionHistory.Any())
+                                                {
+                                                    <div class="sparkline-container">
+                                                        <span class="sparkline-label">Exceptions — 24h</span>
+                                                        <svg class="sparkline" viewBox="0 0 120 30" preserveAspectRatio="none">
+                                                            @foreach (var bar in BuildBars(resource.Metrics.ExceptionHistory))
+                                                            {
+                                                                <rect x="@bar.X" y="@bar.Y" width="@bar.W" height="@bar.H" fill="#ef4444" />
+                                                            }
+                                                        </svg>
+                                                    </div>
+                                                }
+                                                <div class="card-footer">
+                                                    <span class="updated-at">↻ @resource.Metrics.LastUpdated.ToLocalTime().ToString("HH:mm:ss")</span>
+                                                    <a href="https://portal.azure.com/#resource@(resource.Id)/overview"
+                                                       target="_blank" class="portal-link">View in Azure ↗</a>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="card-loading">
+                                                    <span class="spinner spinner--small"></span>
+                                                    <span>Loading metrics...</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    @if (!FilteredResources.Any())
+                    {
+                        <div class="empty-state">No resources match your filters.</div>
+                    }
+                </div>
+            </div><!-- insights-layout -->
+        }
+
+        <!-- ── Tab: Pipelines ── -->
+        @if (ActiveTab == Tab.Pipelines)
+        {
+            <div class="controls-bar">
+                <div class="search-box">
+                    <span class="search-icon">⌕</span>
+                    <input type="text" placeholder="Filter by name, project..."
+                           @bind="PipelineSearch" @bind:event="oninput" class="search-input" />
+                </div>
+                <div class="filter-chips">
+                    <button class="chip @(PipelineHealthFilter == null ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = null">All</button>
+                    <button class="chip chip--critical @(PipelineHealthFilter == PipelineHealth.Failed ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Failed">🔴 Failed</button>
+                    <button class="chip chip--warning @(PipelineHealthFilter == PipelineHealth.Partial ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Partial">🟡 Partial</button>
+                    <button class="chip chip--warning @(PipelineHealthFilter == PipelineHealth.Canceled ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Canceled">⚪ Canceled</button>
+                    <button class="chip chip--healthy @(PipelineHealthFilter == PipelineHealth.Succeeded ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Succeeded">🟢 OK</button>
+                </div>
+                <select class="sort-select" @bind="PipelineSortField">
+                    <option value="health">Sort by status</option>
+                    <option value="name">Name</option>
+                    <option value="date">Last run</option>
+                </select>
+                <select class="sort-select" @bind="PipelineGroupBy">
+                    <option value="none">No grouping</option>
+                    <option value="project">By project</option>
+                    <option value="health">By status</option>
+                </select>
+            </div>
+
+            @if (FilteredPipelineSections.Any(s => s.Pipelines.Any()))
+            {
+                @foreach (var section in FilteredPipelineSections)
+                {
+                    @if (section.Pipelines.Any())
+                    {
+                        <div class="subscription-group">
+                            @if (section.Header != null)
+                            {
+                                <div class="subscription-header">
+                                    <span class="subscription-icon">⬡</span>
+                                    <span class="subscription-name">@(PipelineGroupBy == "project" ? P(section.Header) : section.Header)</span>
+                                    <span class="subscription-count">@(section.Pipelines.Count()) pipelines</span>
+                                </div>
+                            }
+                            <div class="pipeline-grid">
+                                @foreach (var pipeline in section.Pipelines)
+                                {
+                                    <a href="@(pipeline.LastRun?.Url ?? pipeline.DefinitionUrl)" target="_blank"
+                                       class="pipeline-card pipeline-card--@pipeline.Health.ToString().ToLower()">
+                                        <div class="pipeline-card-header">
+                                            <span class="pipeline-health-dot pipeline-health-dot--@pipeline.Health.ToString().ToLower()"></span>
+                                            <span class="pipeline-card-name">@P(pipeline.Name)</span>
+                                            <span class="pipeline-card-status pipeline-card-status--@pipeline.Health.ToString().ToLower()">
+                                                @PipelineHealthLabel(pipeline.Health)
+                                            </span>
+                                        </div>
+                                        <svg class="pipeline-chart" viewBox="0 0 120 16" preserveAspectRatio="none">
+                                            <rect x="0" y="6" width="120" height="4" rx="2" fill="#1e2530" />
+                                            @foreach (var mark in BuildRunMarks(pipeline.RecentRuns))
+                                            {
+                                                <rect x="@mark.X" y="1" width="3" height="14" rx="1" fill="@mark.Color" />
+                                            }
+                                        </svg>
+                                        <div class="pipeline-card-footer">
+                                            <span class="pipeline-card-time">
+                                                @if (pipeline.LastRun != null)
+                                                {
+                                                    @pipeline.LastRun.FinishedAt.ToLocalTime().ToString("dd/MM HH:mm")
+                                                }
+                                            </span>
+                                            <span class="pipeline-card-runs">@pipeline.RecentRuns.Count run(s) / 24h</span>
+                                        </div>
+                                    </a>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            }
+            else
+            {
+                <div class="empty-state">No pipelines match your filters.</div>
+            }
+        }
+
+        <!-- ── Tab: Pull Requests ── -->
+        @if (ActiveTab == Tab.PullRequests)
+        {
+            @if (DashboardSvc.PullRequests.Any())
+            {
+                <div class="devops-list">
+                    @foreach (var pr in DashboardSvc.PullRequests)
+                    {
+                        <a href="@pr.Url" target="_blank" class="devops-row">
+                            <span class="devops-dot devops-dot--@pr.ReviewStatus.ToString().ToLower()"></span>
+                            <span class="devops-main">
+                                <span class="devops-title">
+                                    @if (pr.IsDraft) { <span class="pr-draft">DRAFT</span> }
+                                    @P(pr.Title)
+                                </span>
+                                <span class="devops-sub">@P(pr.Project) / @P(pr.Repository)</span>
+                            </span>
+                            <span class="devops-branch">⎇ @P(pr.SourceBranch) → @P(pr.TargetBranch)</span>
+                            <span class="devops-author">@P(pr.AuthorName)</span>
+                            <span class="devops-time">@pr.CreatedAt.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                            <span class="devops-status devops-status--@pr.ReviewStatus.ToString().ToLower()">
+                                @ReviewStatusLabel(pr.ReviewStatus)
+                                @if (pr.ReviewerCount > 0)
+                                {
+                                    <span class="pr-votes"> @pr.ApprovedCount/@pr.ReviewerCount</span>
+                                }
+                            </span>
+                        </a>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="empty-state">No open pull requests.</div>
+            }
+        }
+    }
+</div>
+
+@code {
+    private enum Tab { Insights, Pipelines, PullRequests }
+    private Tab ActiveTab { get; set; } = Tab.Insights;
+    private bool PrivacyMode { get; set; } = false;
+
+    private string P(string? value) => PrivacyMode ? "••••••" : (value ?? "");
+
+    private string SearchTerm { get; set; } = "";
+    private HealthStatus? StatusFilter { get; set; }
+    private string SortField { get; set; } = "status";
+    private string GroupBy { get; set; } = "none";
+    private string ViewMode { get; set; } = "detailed";
+    private AppInsightsResource? SelectedResource { get; set; }
+
+    // Pipeline filters
+    private string PipelineSearch { get; set; } = "";
+    private PipelineHealth? PipelineHealthFilter { get; set; }
+    private string PipelineSortField { get; set; } = "date";
+    private string PipelineGroupBy { get; set; } = "none";
+
+    private record DisplaySection(string? Header, IEnumerable<AppInsightsResource> Resources);
+    private IEnumerable<DisplaySection> DisplaySections => GroupBy == "none"
+        ? new[] { new DisplaySection(null, FilteredResources) }
+        : FilteredGrouped.Select(g => new DisplaySection(g.Key, g));
+
+    private IEnumerable<AppInsightsResource> FilteredResources =>
+        DashboardSvc.Resources
+            .Where(r => StatusFilter == null || r.Status == StatusFilter)
+            .Where(r => string.IsNullOrWhiteSpace(SearchTerm) ||
+                        r.Name.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase) ||
+                        r.ResourceGroup.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase) ||
+                        r.SubscriptionName.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase) ||
+                        r.Location.Contains(SearchTerm, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(r => SortField switch
+            {
+                "status" => (int)r.Status * -1,
+                "name" => 0,
+                "errors" => (int)-(r.Metrics?.FailedRequestsLast5Min ?? 0),
+                _ => 0
+            })
+            .ThenBy(r => SortField == "name" ? r.Name : r.SubscriptionName);
+
+    private IEnumerable<IGrouping<string, AppInsightsResource>> FilteredGrouped => GroupBy switch
+    {
+        "status" => FilteredResources.GroupBy(r => r.Status switch
+        {
+            HealthStatus.Critical => "🔴 Critical",
+            HealthStatus.Warning  => "🟡 Warning",
+            HealthStatus.Healthy  => "🟢 OK",
+            _                     => "⚪ Unknown"
+        }),
+        _ => FilteredResources.GroupBy(r => r.SubscriptionName)
+    };
+
+    private record PipelineSection(string? Header, IEnumerable<Pipeline> Pipelines);
+
+    private IEnumerable<Pipeline> FilteredPipelines =>
+        DashboardSvc.AllPipelines
+            .Where(p => PipelineHealthFilter == null || p.Health == PipelineHealthFilter)
+            .Where(p => string.IsNullOrWhiteSpace(PipelineSearch) ||
+                        p.Name.Contains(PipelineSearch, StringComparison.OrdinalIgnoreCase) ||
+                        p.Project.Contains(PipelineSearch, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => PipelineSortField switch
+            {
+                "name"   => 0,
+                "date"   => 0,
+                _        => p.SortOrder
+            })
+            .ThenBy(p => PipelineSortField == "name" ? p.Name : "")
+            .ThenByDescending(p => PipelineSortField == "date" ? p.LastRun?.FinishedAt ?? DateTimeOffset.MinValue : DateTimeOffset.MinValue);
+
+    private IEnumerable<PipelineSection> FilteredPipelineSections => PipelineGroupBy switch
+    {
+        "project" => FilteredPipelines.GroupBy(p => p.Project).OrderBy(g => g.Key)
+                        .Select(g => new PipelineSection(g.Key, g)),
+        "health"  => FilteredPipelines.GroupBy(p => PipelineHealthLabel(p.Health))
+                        .OrderBy(g => g.Key)
+                        .Select(g => new PipelineSection(g.Key, g)),
+        _         => new[] { new PipelineSection(null, FilteredPipelines) }
+    };
+
+    private record Bar(string X, string Y, string W, string H);
+
+    private static List<Bar> BuildBars(List<double> history)
+    {
+        var maxVal = history.Max();
+        var slotW = 120.0 / history.Count;
+        var bars = new List<Bar>();
+        for (int i = 0; i < history.Count; i++)
+        {
+            double h = maxVal > 0 && history[i] > 0 ? Math.Max(history[i] / maxVal * 28.0, 2.0) : 0;
+            if (h > 0)
+                bars.Add(new Bar(
+                    (i * slotW + slotW * 0.15).ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                    (30.0 - h).ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                    (slotW * 0.7).ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                    h.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)
+                ));
+        }
+        return bars;
+    }
+
+    private static string TrendIcon(Trend trend) => trend switch
+    {
+        Trend.StrongIncrease => "↑↑",
+        Trend.Increase => "↑",
+        Trend.Decrease => "↓",
+        _ => "→"
+    };
+
+    private record RunMark(string X, string Color);
+
+    private static List<RunMark> BuildRunMarks(List<PipelineRun> runs)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var marks = new List<RunMark>();
+        foreach (var run in runs)
+        {
+            var ageH = (now - run.FinishedAt).TotalHours;
+            if (ageH < 0 || ageH > 24) continue;
+            var x = (1.0 - ageH / 24.0) * 116.0 + 2.0;
+            var color = run.Result switch
+            {
+                "succeeded"          => "#22c55e",
+                "failed"             => "#ef4444",
+                "partiallySucceeded" => "#f59e0b",
+                "canceled"           => "#f59e0b",
+                _                    => "#475569"
+            };
+            marks.Add(new RunMark(
+                (x - 1.5).ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
+                color));
+        }
+        return marks;
+    }
+
+    private static string PipelineHealthLabel(PipelineHealth h) => h switch
+    {
+        PipelineHealth.Succeeded => "OK",
+        PipelineHealth.Partial   => "Partial",
+        PipelineHealth.Canceled  => "Canceled",
+        PipelineHealth.Failed    => "Failed",
+        _                        => "Unknown"
+    };
+
+    private static string ReviewStatusLabel(PrReviewStatus s) => s switch
+    {
+        PrReviewStatus.Approved => "Approved",
+        PrReviewStatus.PartiallyApproved => "Partial",
+        PrReviewStatus.Rejected => "Rejected",
+        _ => "Pending"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        DashboardSvc.OnStateChanged += OnDashboardStateChanged;
+    }
+
+    private async Task InitDashboard() => await DashboardSvc.InitializeAsync();
+    private async Task ForceRefresh() => await DashboardSvc.ForceRefreshAsync();
+
+    private void OnDashboardStateChanged() => InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        DashboardSvc.OnStateChanged -= OnDashboardStateChanged;
+    }
+}

@@ -1,0 +1,11 @@
+﻿{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Application",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run"],
+      "port": 5000
+    }
+  ]
+}
