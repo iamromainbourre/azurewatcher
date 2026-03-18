@@ -69,13 +69,6 @@ public class AzureDiscoveryService(CredentialService credentialService, ILogger<
                 Location = cols[4].GetString() ?? "",
             };
 
-            // Extract InstrumentationKey from properties
-            if (cols[5].ValueKind == JsonValueKind.Object &&
-                cols[5].TryGetProperty("InstrumentationKey", out var ik))
-            {
-                resource.InstrumentationKey = ik.GetString();
-            }
-
             resources.Add(resource);
         }
 

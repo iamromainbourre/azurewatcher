@@ -33,13 +33,6 @@ public class MetricsService(CredentialService credentialService, ILogger<Metrics
 
             var results = response.Value.Metrics;
 
-            foreach (var m in results)
-            {
-                foreach (var ts in m.TimeSeries)
-                    foreach (var v in ts.Values)
-                        logger.LogDebug("[{Metric}] {Time} Total={Total} Count={Count} Avg={Avg}", m.Name, v.TimeStamp, v.Total, v.Count, v.Average);
-            }
-
             metrics.FailedRequestsLast5Min = GetLastValue(results, "requests/failed");
             metrics.TotalRequestsLast5Min = GetLastValue(results, "requests/count");
             metrics.ExceptionHistory = GetTimeSeries(results, "exceptions/count");

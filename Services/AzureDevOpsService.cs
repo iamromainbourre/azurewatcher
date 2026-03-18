@@ -8,9 +8,21 @@ namespace AzureWatcher.Services;
 public class AzureDevOpsService(
     CredentialService credentialService,
     ILogger<AzureDevOpsService> logger,
-    IConfiguration config)
+    IConfiguration config,
+    IHttpClientFactory httpClientFactory)
 {
-    private readonly string _orgUrl = config["AzureDevOps:OrganizationUrl"]?.TrimEnd('/') ?? throw new ArgumentException("AzureDevOps organization URL cannot be null or empty");
+    private readonly string _orgUrl = ValidateOrgUrl(config["AzureDevOps:OrganizationUrl"]);
+
+    private static string ValidateOrgUrl(string? rawUrl)
+    {
+        var url = rawUrl?.TrimEnd('/') ?? throw new ArgumentException("AzureDevOps organization URL cannot be null or empty");
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            throw new ArgumentException("AzureDevOps organization URL must be a valid HTTPS URL");
+        if (!uri.Host.EndsWith("dev.azure.com", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.EndsWith("visualstudio.com", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("AzureDevOps organization URL must be an Azure DevOps host");
+        return url;
+    }
 
     // Azure DevOps resource ID for token acquisition
     private static readonly string[] DevOpsScopes = ["499b84ac-1321-427f-aa17-267ca6975798/.default"];
@@ -23,7 +35,7 @@ public class AzureDevOpsService(
             var credential = credentialService.Get();
             var token = await credential.GetTokenAsync(new TokenRequestContext(DevOpsScopes), ct);
 
-            using var http = new HttpClient();
+            var http = httpClientFactory.CreateClient();
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
             http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -167,7 +179,7 @@ public class AzureDevOpsService(
             var credential = credentialService.Get();
             var token = await credential.GetTokenAsync(new TokenRequestContext(DevOpsScopes), ct);
 
-            using var http = new HttpClient();
+            var http = httpClientFactory.CreateClient();
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
             http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
