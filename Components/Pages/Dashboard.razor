@@ -89,6 +89,14 @@
                     <span class="tab-badge tab-badge--accent">@DashboardSvc.PullRequests.Count</span>
                 }
             </button>
+            <button class="tab-btn @(ActiveTab == Tab.Wiki ? "tab-btn--active" : "")" @onclick="OnWikiTabClicked">
+                <span class="tab-icon">☰</span>
+                <span>Wiki</span>
+                @if (DashboardSvc.WikisLoaded && DashboardSvc.WikiBrowseStates.Any())
+                {
+                    <span class="tab-badge tab-badge--accent">@DashboardSvc.WikiBrowseStates.Count</span>
+                }
+            </button>
         </nav>
 
         <!-- ── Tab: Insights ── -->
@@ -444,11 +452,147 @@
                 <div class="empty-state">No open pull requests.</div>
             }
         }
+
+        <!-- ── Tab: Wiki ── -->
+        @if (ActiveTab == Tab.Wiki)
+        {
+            <div class="controls-bar">
+                <div class="view-toggle">
+                    <button class="view-btn @(!WikiSearchMode ? "view-btn--active" : "")"
+                            @onclick="() => WikiSearchMode = false">☰ Browse</button>
+                    <button class="view-btn @(WikiSearchMode ? "view-btn--active" : "")"
+                            @onclick="() => WikiSearchMode = true">⌕ Search</button>
+                </div>
+                @if (WikiSearchMode)
+                {
+                    <div class="search-box" style="flex: 1">
+                        <span class="search-icon">⌕</span>
+                        <input type="text" placeholder="Search wiki content..."
+                               @bind="WikiSearchQuery" @bind:event="oninput"
+                               class="search-input"
+                               @onkeydown="WikiSearchKeyDown" />
+                    </div>
+                    <button class="btn btn-ghost" @onclick="RunWikiSearch" disabled="@DashboardSvc.IsSearchingWiki">
+                        @if (DashboardSvc.IsSearchingWiki) { <span class="spinner spinner--small"></span> }
+                        Search
+                    </button>
+                }
+            </div>
+
+            <div class="wiki-layout">
+                <div class="wiki-panel">
+                    @if (!WikiSearchMode)
+                    {
+                        <!-- Browse mode -->
+                        @if (DashboardSvc.IsLoadingWikis)
+                        {
+                            <div class="card-loading">
+                                <span class="spinner"></span>
+                                <span>Loading wikis...</span>
+                            </div>
+                        }
+                        else if (!DashboardSvc.WikiBrowseStates.Any())
+                        {
+                            <div class="empty-state">No wikis found.</div>
+                        }
+                        else
+                        {
+                            @foreach (var wikiState in DashboardSvc.WikiBrowseStates)
+                            {
+                                <div class="wiki-tree-wiki">
+                                    <button class="wiki-tree-header" @onclick="async () => await ToggleWikiExpand(wikiState)">
+                                        <span class="wiki-tree-chevron @(ExpandedWikis.Contains(wikiState.Wiki.Id) ? "wiki-tree-chevron--open" : "")">▶</span>
+                                        <span class="wiki-tree-wiki-name">@P(wikiState.Wiki.Name)</span>
+                                        <span class="subscription-count">@P(wikiState.Wiki.Project)</span>
+                                        @if (wikiState.IsLoading)
+                                        {
+                                            <span class="spinner spinner--small" style="margin-left: 8px"></span>
+                                        }
+                                    </button>
+                                    @if (ExpandedWikis.Contains(wikiState.Wiki.Id))
+                                    {
+                                        @if (wikiState.IsLoading)
+                                        {
+                                            <div class="card-loading" style="padding-left: 24px">
+                                                <span>Loading pages...</span>
+                                            </div>
+                                        }
+                                        else if (!wikiState.Pages.Any())
+                                        {
+                                            <div class="card-loading" style="padding-left: 24px; color: var(--text-dim)">
+                                                <span>No pages found.</span>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var page in wikiState.Pages.OrderBy(p => p.Order))
+                                            {
+                                                <WikiPageTreeNode Page="page"
+                                                                 OnPageSelected="async node => await LoadWikiPage(node, wikiState)"
+                                                                 SelectedPath="SelectedWikiPage?.Path"
+                                                                 Depth="0" />
+                                            }
+                                        }
+                                    }
+                                </div>
+                            }
+                        }
+                    }
+                    else
+                    {
+                        <!-- Search mode -->
+                        @if (DashboardSvc.IsSearchingWiki)
+                        {
+                            <div class="card-loading">
+                                <span class="spinner"></span>
+                                <span>Searching...</span>
+                            </div>
+                        }
+                        else if (!DashboardSvc.WikiSearchResults.Any())
+                        {
+                            <div class="empty-state">Type a query and press Search.</div>
+                        }
+                        else
+                        {
+                            @foreach (var result in DashboardSvc.WikiSearchResults)
+                            {
+                                <div class="wiki-search-result" @onclick="async () => await LoadWikiPageFromSearch(result)">
+                                    <div class="devops-title">@P(result.FileName)</div>
+                                    <div class="devops-sub">@P(result.Project) / @P(result.WikiName) · @P(result.Path)</div>
+                                    @foreach (var snippet in result.Snippets)
+                                    {
+                                        <div class="wiki-search-snippet">@((MarkupString)snippet)</div>
+                                    }
+                                </div>
+                            }
+                        }
+                    }
+                </div>
+
+                @if (SelectedWikiPage != null)
+                {
+                    <div class="sidebar-backdrop" @onclick="() => SelectedWikiPage = null"></div>
+                    <aside class="sidebar wiki-content-panel">
+                        <div class="sidebar-header">
+                            <div class="sidebar-title">
+                                <span class="sidebar-name">@P(SelectedWikiPage.WikiName)@P(SelectedWikiPage.Path)</span>
+                                <span class="sidebar-sub">@P(SelectedWikiPage.Project)</span>
+                            </div>
+                            <a href="@SelectedWikiPage.Url" target="_blank" class="portal-link" style="flex-shrink: 0">↗</a>
+                            <button class="sidebar-close" @onclick="() => SelectedWikiPage = null">✕</button>
+                        </div>
+                        <div class="sidebar-body">
+                            <pre class="wiki-content-pre">@SelectedWikiPage.Content</pre>
+                        </div>
+                    </aside>
+                }
+            </div>
+        }
     }
 </div>
 
 @code {
-    private enum Tab { Insights, Pipelines, PullRequests }
+    private enum Tab { Insights, Pipelines, PullRequests, Wiki }
     private Tab ActiveTab { get; set; } = Tab.Insights;
     private bool PrivacyMode { get; set; } = false;
 
@@ -466,6 +610,12 @@
     private PipelineHealth? PipelineHealthFilter { get; set; }
     private string PipelineSortField { get; set; } = "date";
     private string PipelineGroupBy { get; set; } = "none";
+
+    // Wiki state
+    private bool WikiSearchMode { get; set; }
+    private string WikiSearchQuery { get; set; } = "";
+    private HashSet<string> ExpandedWikis { get; set; } = new();
+    private WikiPageContent? SelectedWikiPage { get; set; }
 
     private record DisplaySection(string? Header, IEnumerable<AppInsightsResource> Resources);
     private IEnumerable<DisplaySection> DisplaySections => GroupBy == "none"
@@ -599,6 +749,47 @@
         PrReviewStatus.Rejected => "Rejected",
         _ => "Pending"
     };
+
+    private async Task OnWikiTabClicked()
+    {
+        ActiveTab = Tab.Wiki;
+        await DashboardSvc.EnsureWikisLoadedAsync();
+    }
+
+    private async Task ToggleWikiExpand(WikiBrowseState state)
+    {
+        if (ExpandedWikis.Contains(state.Wiki.Id))
+        {
+            ExpandedWikis.Remove(state.Wiki.Id);
+        }
+        else
+        {
+            ExpandedWikis.Add(state.Wiki.Id);
+            await DashboardSvc.ExpandWikiAsync(state);
+        }
+    }
+
+    private async Task LoadWikiPage(WikiPageNode page, WikiBrowseState state)
+    {
+        SelectedWikiPage = await DashboardSvc.LoadWikiPageAsync(
+            state.Wiki.Project, state.Wiki.Id, state.Wiki.Name, page.Path);
+    }
+
+    private async Task LoadWikiPageFromSearch(WikiSearchResult result)
+    {
+        SelectedWikiPage = await DashboardSvc.LoadWikiPageAsync(
+            result.Project, result.WikiId, result.WikiName, result.Path);
+    }
+
+    private async Task RunWikiSearch()
+    {
+        await DashboardSvc.SearchWikiAsync(WikiSearchQuery);
+    }
+
+    private async Task WikiSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RunWikiSearch();
+    }
 
     protected override async Task OnInitializedAsync()
     {

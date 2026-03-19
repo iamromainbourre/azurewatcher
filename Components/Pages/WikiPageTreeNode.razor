@@ -1,0 +1,39 @@
+<div class="wiki-tree-page @(SelectedPath == Page.Path ? "wiki-tree-page--selected" : "")">
+    <div class="wiki-tree-row" style="padding-left: @(Depth * 16 + 8)px">
+        @if (Page.SubPages.Any())
+        {
+            <button class="wiki-tree-chevron @(IsExpanded ? "wiki-tree-chevron--open" : "")"
+                    @onclick:stopPropagation="true"
+                    @onclick="() => IsExpanded = !IsExpanded">▶</button>
+        }
+        else
+        {
+            <span class="wiki-tree-leaf-icon">·</span>
+        }
+        <button class="wiki-tree-page-btn" @onclick="HandleClick">@Page.Name</button>
+    </div>
+    @if (IsExpanded && Page.SubPages.Any())
+    {
+        @foreach (var sub in Page.SubPages.OrderBy(p => p.Order))
+        {
+            <WikiPageTreeNode Page="sub"
+                              OnPageSelected="OnPageSelected"
+                              SelectedPath="SelectedPath"
+                              Depth="Depth + 1" />
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public WikiPageNode Page { get; set; } = new();
+    [Parameter] public EventCallback<WikiPageNode> OnPageSelected { get; set; }
+    [Parameter] public string? SelectedPath { get; set; }
+    [Parameter] public int Depth { get; set; }
+
+    private bool IsExpanded { get; set; }
+
+    private async Task HandleClick()
+    {
+        await OnPageSelected.InvokeAsync(Page);
+    }
+}
