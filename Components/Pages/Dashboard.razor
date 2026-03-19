@@ -3,7 +3,7 @@
 @inject DashboardService DashboardSvc
 @implements IAsyncDisposable
 
-<div class="dashboard">
+<div class="dashboard @(FullscreenMode ? "dashboard--fullscreen" : "")">
     <!-- Header -->
     <header class="header">
         <div class="header-left">
@@ -149,6 +149,7 @@
                             @onclick='() => ViewMode = "detailed"'>⊞ Detailed</button>
                     <button class="view-btn @(ViewMode == "compact" ? "view-btn--active" : "")"
                             @onclick='() => { ViewMode = "compact"; SelectedResource = null; }'>☰ Compact</button>
+                    <button class="view-btn" @onclick='() => { FullscreenMode = true; SelectedResource = null; }' title="Fullscreen cards">⛶ Full</button>
                 </div>
             </div>
 
@@ -589,6 +590,12 @@
             </div>
         }
     }
+
+
+@if (FullscreenMode)
+{
+    <button class="fullscreen-exit-btn" @onclick='() => FullscreenMode = false' title="Exit fullscreen">✕ Exit Fullscreen</button>
+}
 </div>
 
 @code {
@@ -603,6 +610,7 @@
     private string SortField { get; set; } = "status";
     private string GroupBy { get; set; } = "none";
     private string ViewMode { get; set; } = "detailed";
+    private bool FullscreenMode { get; set; } = false;
     private AppInsightsResource? SelectedResource { get; set; }
 
     // Pipeline filters
