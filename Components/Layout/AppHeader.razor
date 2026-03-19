@@ -1,0 +1,104 @@
+@rendermode InteractiveServer
+@inject WatcherService WatcherSvc
+@implements IAsyncDisposable
+
+<header class="header">
+    <div class="header-left">
+        <div class="logo">
+            <span class="logo-icon">◈</span>
+            <span class="logo-text">Azure<strong>Watcher</strong></span>
+        </div>
+
+        @if (WatcherSvc.IsAuthenticated)
+        {
+            <nav class="nav">
+                <NavLink class="nav-link" href="/" Match="NavLinkMatch.All" ActiveClass="nav-link--active">
+                    <span class="nav-icon">◈</span>
+                    <span>Insights</span>
+                    <span class="tab-badge tab-badge--critical">@WatcherSvc.CriticalCount</span>
+                </NavLink>
+                <NavLink class="nav-link" href="/pipelines" ActiveClass="nav-link--active">
+                    <span class="nav-icon">⬡</span>
+                    <span>Pipelines</span>
+                    @if (WatcherSvc.FailedPipelinesCount > 0)
+                    {
+                        <span class="tab-badge tab-badge--critical">@WatcherSvc.FailedPipelinesCount</span>
+                    }
+                </NavLink>
+                <NavLink class="nav-link" href="/pull-requests" ActiveClass="nav-link--active">
+                    <span class="nav-icon">⤴</span>
+                    <span>Pull Requests</span>
+                    @if (WatcherSvc.PullRequests.Any())
+                    {
+                        <span class="tab-badge tab-badge--accent">@WatcherSvc.PullRequests.Count</span>
+                    }
+                </NavLink>
+                <NavLink class="nav-link" href="/wiki" ActiveClass="nav-link--active">
+                    <span class="nav-icon">☰</span>
+                    <span>Wiki</span>
+                    @if (WatcherSvc.WikisLoaded && WatcherSvc.WikiBrowseStates.Any())
+                    {
+                        <span class="tab-badge tab-badge--accent">@WatcherSvc.WikiBrowseStates.Count</span>
+                    }
+                </NavLink>
+            </nav>
+        }
+    </div>
+
+    <div class="header-right">
+        @if (WatcherSvc.LastRefresh.HasValue)
+        {
+            <span class="last-refresh">updated @WatcherSvc.LastRefresh.Value.ToLocalTime().ToString("HH:mm:ss")</span>
+        }
+        @if (!WatcherSvc.IsAuthenticated)
+        {
+            <button class="btn btn-primary" @onclick="InitDashboard" disabled="@WatcherSvc.IsLoading">
+                @if (WatcherSvc.IsLoading)
+                {
+                    <span class="spinner"></span><span>Connecting...</span>
+                }
+                else
+                {
+                    <span>🔐 Sign in to Azure</span>
+                }
+            </button>
+        }
+        else
+        {
+            <div class="polling-badge @(WatcherSvc.IsLoading ? "polling-badge--active" : "")">
+                <span class="pulse-dot"></span>
+                <span>Auto-refresh 30s</span>
+            </div>
+            <button class="btn btn-ghost" @onclick="ForceRefresh" disabled="@WatcherSvc.IsLoading">
+                ↻ Refresh
+            </button>
+            <button class="btn @(WatcherSvc.PrivacyMode ? "btn-primary" : "btn-ghost")"
+                    @onclick="() => WatcherSvc.PrivacyMode = !WatcherSvc.PrivacyMode"
+                    title="@(WatcherSvc.PrivacyMode ? "Afficher les informations" : "Masquer les informations confidentielles")">
+                @(WatcherSvc.PrivacyMode ? "🔒 Privé" : "👁 Masquer")
+            </button>
+        }
+    </div>
+</header>
+
+@if (WatcherSvc.ErrorMessage != null)
+{
+    <div class="error-banner">⚠ @WatcherSvc.ErrorMessage</div>
+}
+
+@code {
+    private async Task InitDashboard() => await WatcherSvc.InitializeAsync();
+    private async Task ForceRefresh() => await WatcherSvc.ForceRefreshAsync();
+
+    protected override void OnInitialized()
+    {
+        WatcherSvc.OnStateChanged += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        WatcherSvc.OnStateChanged -= OnStateChanged;
+    }
+}

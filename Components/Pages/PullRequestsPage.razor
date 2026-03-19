@@ -1,0 +1,64 @@
+@page "/pull-requests"
+@rendermode InteractiveServer
+@inject WatcherService WatcherSvc
+@implements IAsyncDisposable
+
+@if (WatcherSvc.IsAuthenticated)
+{
+    @if (WatcherSvc.PullRequests.Any())
+    {
+        <div class="devops-list">
+            @foreach (var pr in WatcherSvc.PullRequests)
+            {
+                <a href="@pr.Url" target="_blank" class="devops-row">
+                    <span class="devops-dot devops-dot--@pr.ReviewStatus.ToString().ToLower()"></span>
+                    <span class="devops-main">
+                        <span class="devops-title">
+                            @if (pr.IsDraft) { <span class="pr-draft">DRAFT</span> }
+                            @P(pr.Title)
+                        </span>
+                        <span class="devops-sub">@P(pr.Project) / @P(pr.Repository)</span>
+                    </span>
+                    <span class="devops-branch">⎇ @P(pr.SourceBranch) → @P(pr.TargetBranch)</span>
+                    <span class="devops-author">@P(pr.AuthorName)</span>
+                    <span class="devops-time">@pr.CreatedAt.ToLocalTime().ToString("dd/MM HH:mm")</span>
+                    <span class="devops-status devops-status--@pr.ReviewStatus.ToString().ToLower()">
+                        @ReviewStatusLabel(pr.ReviewStatus)
+                        @if (pr.ReviewerCount > 0)
+                        {
+                            <span class="pr-votes"> @pr.ApprovedCount/@pr.ReviewerCount</span>
+                        }
+                    </span>
+                </a>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="empty-state">No open pull requests.</div>
+    }
+}
+
+@code {
+    private string P(string? value) => WatcherSvc.PrivacyMode ? "••••••" : (value ?? "");
+
+    private static string ReviewStatusLabel(PrReviewStatus s) => s switch
+    {
+        PrReviewStatus.Approved => "Approved",
+        PrReviewStatus.PartiallyApproved => "Partial",
+        PrReviewStatus.Rejected => "Rejected",
+        _ => "Pending"
+    };
+
+    protected override void OnInitialized()
+    {
+        WatcherSvc.OnStateChanged += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        WatcherSvc.OnStateChanged -= OnStateChanged;
+    }
+}
