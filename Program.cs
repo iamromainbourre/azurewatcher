@@ -14,7 +14,7 @@ builder.Services.AddSingleton<CredentialService>();
 builder.Services.AddSingleton<AzureDiscoveryService>();
 builder.Services.AddSingleton<MetricsService>();
 builder.Services.AddSingleton<AzureDevOpsService>();
-builder.Services.AddSingleton<DashboardService>();
+builder.Services.AddSingleton<WatcherService>();
 
 var app = builder.Build();
 

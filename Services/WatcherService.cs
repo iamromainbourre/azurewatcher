@@ -2,11 +2,11 @@ using AzureWatcher.Models;
 
 namespace AzureWatcher.Services;
 
-public class DashboardService(
+public class WatcherService(
     AzureDiscoveryService discovery,
     MetricsService metrics,
     AzureDevOpsService devOps,
-    ILogger<DashboardService> logger)
+    ILogger<WatcherService> logger)
     : IAsyncDisposable
 {
     private List<AppInsightsResource> _resources = new();
@@ -36,6 +36,13 @@ public class DashboardService(
     public string? ErrorMessage { get; private set; }
     public DateTimeOffset? LastRefresh { get; private set; }
     public TimeSpan PollingInterval { get; set; } = TimeSpan.FromSeconds(30);
+
+    private bool _privacyMode;
+    public bool PrivacyMode
+    {
+        get => _privacyMode;
+        set { _privacyMode = value; NotifyStateChanged(); }
+    }
 
     public int CriticalCount => _resources.Count(r => r.Status == HealthStatus.Critical);
     public int WarningCount => _resources.Count(r => r.Status == HealthStatus.Warning);

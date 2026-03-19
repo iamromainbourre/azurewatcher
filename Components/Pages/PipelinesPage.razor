@@ -1,0 +1,170 @@
+@page "/pipelines"
+@rendermode InteractiveServer
+@inject WatcherService WatcherSvc
+@implements IAsyncDisposable
+
+@if (WatcherSvc.IsAuthenticated)
+{
+    <div class="controls-bar">
+        <div class="search-box">
+            <span class="search-icon">⌕</span>
+            <input type="text" placeholder="Filter by name, project..."
+                   @bind="PipelineSearch" @bind:event="oninput" class="search-input" />
+        </div>
+        <div class="filter-chips">
+            <button class="chip @(PipelineHealthFilter == null ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = null">All</button>
+            <button class="chip chip--critical @(PipelineHealthFilter == PipelineHealth.Failed ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Failed">🔴 Failed</button>
+            <button class="chip chip--warning @(PipelineHealthFilter == PipelineHealth.Partial ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Partial">🟡 Partial</button>
+            <button class="chip chip--warning @(PipelineHealthFilter == PipelineHealth.Canceled ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Canceled">⚪ Canceled</button>
+            <button class="chip chip--healthy @(PipelineHealthFilter == PipelineHealth.Succeeded ? "chip--active" : "")" @onclick="() => PipelineHealthFilter = PipelineHealth.Succeeded">🟢 OK</button>
+        </div>
+        <select class="sort-select" @bind="PipelineSortField">
+            <option value="health">Sort by status</option>
+            <option value="name">Name</option>
+            <option value="date">Last run</option>
+        </select>
+        <select class="sort-select" @bind="PipelineGroupBy">
+            <option value="none">No grouping</option>
+            <option value="project">By project</option>
+            <option value="health">By status</option>
+        </select>
+    </div>
+
+    @if (FilteredPipelineSections.Any(s => s.Pipelines.Any()))
+    {
+        @foreach (var section in FilteredPipelineSections)
+        {
+            @if (section.Pipelines.Any())
+            {
+                <div class="subscription-group">
+                    @if (section.Header != null)
+                    {
+                        <div class="subscription-header">
+                            <span class="subscription-icon">⬡</span>
+                            <span class="subscription-name">@(PipelineGroupBy == "project" ? P(section.Header) : section.Header)</span>
+                            <span class="subscription-count">@(section.Pipelines.Count()) pipelines</span>
+                        </div>
+                    }
+                    <div class="pipeline-grid">
+                        @foreach (var pipeline in section.Pipelines)
+                        {
+                            <a href="@(pipeline.LastRun?.Url ?? pipeline.DefinitionUrl)" target="_blank"
+                               class="pipeline-card pipeline-card--@pipeline.Health.ToString().ToLower()">
+                                <div class="pipeline-card-header">
+                                    <span class="pipeline-health-dot pipeline-health-dot--@pipeline.Health.ToString().ToLower()"></span>
+                                    <span class="pipeline-card-name">@P(pipeline.Name)</span>
+                                    <span class="pipeline-card-status pipeline-card-status--@pipeline.Health.ToString().ToLower()">
+                                        @PipelineHealthLabel(pipeline.Health)
+                                    </span>
+                                </div>
+                                <svg class="pipeline-chart" viewBox="0 0 120 16" preserveAspectRatio="none">
+                                    <rect x="0" y="6" width="120" height="4" rx="2" fill="#1e2530" />
+                                    @foreach (var mark in BuildRunMarks(pipeline.RecentRuns))
+                                    {
+                                        <rect x="@mark.X" y="1" width="3" height="14" rx="1" fill="@mark.Color" />
+                                    }
+                                </svg>
+                                <div class="pipeline-card-footer">
+                                    <span class="pipeline-card-time">
+                                        @if (pipeline.LastRun != null)
+                                        {
+                                            @pipeline.LastRun.FinishedAt.ToLocalTime().ToString("dd/MM HH:mm")
+                                        }
+                                    </span>
+                                    <span class="pipeline-card-runs">@pipeline.RecentRuns.Count run(s) / 24h</span>
+                                </div>
+                            </a>
+                        }
+                    </div>
+                </div>
+            }
+        }
+    }
+    else
+    {
+        <div class="empty-state">No pipelines match your filters.</div>
+    }
+}
+
+@code {
+    private string PipelineSearch { get; set; } = "";
+    private PipelineHealth? PipelineHealthFilter { get; set; }
+    private string PipelineSortField { get; set; } = "date";
+    private string PipelineGroupBy { get; set; } = "none";
+
+    private string P(string? value) => WatcherSvc.PrivacyMode ? "••••••" : (value ?? "");
+
+    private record PipelineSection(string? Header, IEnumerable<Pipeline> Pipelines);
+
+    private IEnumerable<Pipeline> FilteredPipelines =>
+        WatcherSvc.AllPipelines
+            .Where(p => PipelineHealthFilter == null || p.Health == PipelineHealthFilter)
+            .Where(p => string.IsNullOrWhiteSpace(PipelineSearch) ||
+                        p.Name.Contains(PipelineSearch, StringComparison.OrdinalIgnoreCase) ||
+                        p.Project.Contains(PipelineSearch, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => PipelineSortField switch
+            {
+                "name"   => 0,
+                "date"   => 0,
+                _        => p.SortOrder
+            })
+            .ThenBy(p => PipelineSortField == "name" ? p.Name : "")
+            .ThenByDescending(p => PipelineSortField == "date" ? p.LastRun?.FinishedAt ?? DateTimeOffset.MinValue : DateTimeOffset.MinValue);
+
+    private IEnumerable<PipelineSection> FilteredPipelineSections => PipelineGroupBy switch
+    {
+        "project" => FilteredPipelines.GroupBy(p => p.Project).OrderBy(g => g.Key)
+                        .Select(g => new PipelineSection(g.Key, g)),
+        "health"  => FilteredPipelines.GroupBy(p => PipelineHealthLabel(p.Health))
+                        .OrderBy(g => g.Key)
+                        .Select(g => new PipelineSection(g.Key, g)),
+        _         => new[] { new PipelineSection(null, FilteredPipelines) }
+    };
+
+    private record RunMark(string X, string Color);
+
+    private static List<RunMark> BuildRunMarks(List<PipelineRun> runs)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var marks = new List<RunMark>();
+        foreach (var run in runs)
+        {
+            var ageH = (now - run.FinishedAt).TotalHours;
+            if (ageH < 0 || ageH > 24) continue;
+            var x = (1.0 - ageH / 24.0) * 116.0 + 2.0;
+            var color = run.Result switch
+            {
+                "succeeded"          => "#22c55e",
+                "failed"             => "#ef4444",
+                "partiallySucceeded" => "#f59e0b",
+                "canceled"           => "#f59e0b",
+                _                    => "#475569"
+            };
+            marks.Add(new RunMark(
+                (x - 1.5).ToString("F1", System.Globalization.CultureInfo.InvariantCulture),
+                color));
+        }
+        return marks;
+    }
+
+    private static string PipelineHealthLabel(PipelineHealth h) => h switch
+    {
+        PipelineHealth.Succeeded => "OK",
+        PipelineHealth.Partial   => "Partial",
+        PipelineHealth.Canceled  => "Canceled",
+        PipelineHealth.Failed    => "Failed",
+        _                        => "Unknown"
+    };
+
+    protected override void OnInitialized()
+    {
+        WatcherSvc.OnStateChanged += OnStateChanged;
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        WatcherSvc.OnStateChanged -= OnStateChanged;
+    }
+}
