@@ -528,7 +528,6 @@
                                             @foreach (var page in wikiState.Pages.OrderBy(p => p.Order))
                                             {
                                                 <WikiPageTreeNode Page="page"
-                                                                 WikiState="wikiState"
                                                                  OnPageSelected="async node => await LoadWikiPage(node, wikiState)"
                                                                  SelectedPath="SelectedWikiPage?.Path"
                                                                  Depth="0" />

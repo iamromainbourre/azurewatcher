@@ -17,7 +17,6 @@
         @foreach (var sub in Page.SubPages.OrderBy(p => p.Order))
         {
             <WikiPageTreeNode Page="sub"
-                              WikiState="WikiState"
                               OnPageSelected="OnPageSelected"
                               SelectedPath="SelectedPath"
                               Depth="Depth + 1" />
@@ -27,7 +26,6 @@
 
 @code {
     [Parameter] public WikiPageNode Page { get; set; } = new();
-    [Parameter] public WikiBrowseState WikiState { get; set; } = new();
     [Parameter] public EventCallback<WikiPageNode> OnPageSelected { get; set; }
     [Parameter] public string? SelectedPath { get; set; }
     [Parameter] public int Depth { get; set; }

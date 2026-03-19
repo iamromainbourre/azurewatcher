@@ -30,6 +30,16 @@ public class AzureDevOpsService(
     // Azure DevOps resource ID for token acquisition
     private static readonly string[] DevOpsScopes = ["499b84ac-1321-427f-aa17-267ca6975798/.default"];
 
+    private static string SanitizeWikiSearchSnippet(string snippet)
+    {
+        if (string.IsNullOrEmpty(snippet)) return "";
+
+        var sanitized = System.Net.WebUtility.HtmlEncode(snippet);
+        return sanitized
+            .Replace("&lt;c0&gt;", "<mark>", StringComparison.Ordinal)
+            .Replace("&lt;/c0&gt;", "</mark>", StringComparison.Ordinal);
+    }
+
     public async Task<List<Pipeline>> GetAllPipelinesAsync(CancellationToken ct = default)
     {
         var result = new List<Pipeline>();
@@ -435,7 +445,7 @@ public class AzureDevOpsService(
                         if (hit.TryGetProperty("charContent", out var cc))
                         {
                             var snippet = cc.GetString() ?? "";
-                            snippet = snippet.Replace("<c0>", "<mark>").Replace("</c0>", "</mark>");
+                            snippet = SanitizeWikiSearchSnippet(snippet);
                             snippets.Add(snippet);
                         }
                     }
