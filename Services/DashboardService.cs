@@ -12,6 +12,11 @@ public class DashboardService(
     private List<AppInsightsResource> _resources = new();
     private List<Pipeline> _allPipelines = new();
     private List<PullRequest> _pullRequests = new();
+    private List<WikiBrowseState> _wikiBrowseStates = new();
+    private List<WikiSearchResult> _wikiSearchResults = new();
+    private bool _wikisLoaded;
+    private bool _isLoadingWikis;
+    private bool _isSearchingWiki;
     private CancellationTokenSource? _cts;
     private Task? _pollingTask;
 
@@ -21,6 +26,11 @@ public class DashboardService(
     public IReadOnlyList<Pipeline> AllPipelines => _allPipelines;
     public int FailedPipelinesCount => _allPipelines.Count(p => p.Health == PipelineHealth.Failed);
     public IReadOnlyList<PullRequest> PullRequests => _pullRequests;
+    public IReadOnlyList<WikiBrowseState> WikiBrowseStates => _wikiBrowseStates;
+    public IReadOnlyList<WikiSearchResult> WikiSearchResults => _wikiSearchResults;
+    public bool WikisLoaded => _wikisLoaded;
+    public bool IsLoadingWikis => _isLoadingWikis;
+    public bool IsSearchingWiki => _isSearchingWiki;
     public bool IsLoading { get; private set; }
     public bool IsAuthenticated { get; private set; }
     public string? ErrorMessage { get; private set; }
@@ -128,6 +138,78 @@ public class DashboardService(
         // Reset LastRefresh to force re-discovery too
         LastRefresh = null;
         await RefreshMetricsAsync(_cts?.Token ?? CancellationToken.None);
+    }
+
+    // ── Wiki (lazy-loaded, not polled) ────────────────────────────────────
+
+    public async Task EnsureWikisLoadedAsync()
+    {
+        if (_wikisLoaded || _isLoadingWikis) return;
+        _isLoadingWikis = true;
+        NotifyStateChanged();
+        try
+        {
+            _wikiBrowseStates = await devOps.GetAllWikisAsync(_cts?.Token ?? CancellationToken.None);
+            _wikisLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to load wikis");
+        }
+        finally
+        {
+            _isLoadingWikis = false;
+            NotifyStateChanged();
+        }
+    }
+
+    public async Task ExpandWikiAsync(WikiBrowseState state)
+    {
+        if (state.IsLoaded || state.IsLoading) return;
+        state.IsLoading = true;
+        NotifyStateChanged();
+        try
+        {
+            state.Pages = await devOps.GetWikiPagesAsync(
+                state.Wiki.Project, state.Wiki.Id, _cts?.Token ?? CancellationToken.None);
+            state.IsLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to expand wiki {WikiId}", state.Wiki.Id);
+        }
+        finally
+        {
+            state.IsLoading = false;
+            NotifyStateChanged();
+        }
+    }
+
+    public async Task SearchWikiAsync(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return;
+        _isSearchingWiki = true;
+        NotifyStateChanged();
+        try
+        {
+            _wikiSearchResults = await devOps.SearchWikiAsync(query, _cts?.Token ?? CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to search wiki");
+        }
+        finally
+        {
+            _isSearchingWiki = false;
+            NotifyStateChanged();
+        }
+    }
+
+    public async Task<WikiPageContent?> LoadWikiPageAsync(
+        string project, string wikiId, string wikiName, string path)
+    {
+        return await devOps.GetWikiPageContentAsync(
+            project, wikiId, wikiName, path, _cts?.Token ?? CancellationToken.None);
     }
 
     private void NotifyStateChanged() => OnStateChanged?.Invoke();

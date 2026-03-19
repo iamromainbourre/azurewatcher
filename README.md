@@ -10,7 +10,7 @@ It automatically discovers all your Application Insights resources across all yo
 
 - **Multi-subscription discovery** — automatically finds all App Insights resources via Azure Resource Graph
 - **Real-time health monitoring** — failed requests, error rates, and 24h exception history with visual status indicators (critical / warning / healthy)
-- **Azure DevOps integration** — pipeline statuses, run timelines, and open pull requests with review status
+- **Azure DevOps integration** — pipeline statuses, run timelines, open pull requests with review status, and wiki browsing with full-text search
 - **Browser-based authentication** — interactive sign-in via Azure Identity with token caching; no secrets to manage locally
 - **Auto-refresh** — dashboard polls every 30 seconds to stay up to date
 
@@ -73,6 +73,23 @@ The token is cached for the lifetime of the process.
 | Azure Monitor       | `Monitoring Reader`        |
 | Azure DevOps        | Organization member access |
 
+## Wiki tab
+
+The Wiki tab lets you browse and search all wiki pages across every project in your Azure DevOps organization.
+
+**Browse mode**
+- Lists all wikis grouped by project
+- Expand a wiki to reveal the full page tree (lazy-loaded on first expand)
+- Click any page to open its markdown content in a side panel
+- The `↗` link in the panel header opens the page directly in Azure DevOps
+
+**Search mode**
+- Full-text search powered by the Azure DevOps Search API (`almsearch.dev.azure.com`)
+- Results include highlighted snippets showing where the query matched
+- Click a result to read the page content inline, with the same `↗` link to open it in Azure DevOps
+
+> Wiki data is loaded on demand when you first navigate to the tab — it is not included in the 30-second polling loop.
+
 ## Architecture
 
 ```
@@ -80,16 +97,18 @@ Services/
   CredentialService.cs       → Singleton: holds the InteractiveBrowserCredential (MSAL)
   AzureDiscoveryService.cs   → Azure Resource Graph, multi-subscription discovery
   MetricsService.cs          → Azure Monitor Metrics API
-  AzureDevOpsService.cs      → Azure DevOps REST API (pipelines, pull requests)
+  AzureDevOpsService.cs      → Azure DevOps REST API (pipelines, pull requests, wiki)
   DashboardService.cs        → Orchestration, 30s polling, state management
 
 Models/
   AppInsightsResource.cs     → AppInsights models + status computation + trends
   Pipeline.cs                → Pipeline models + run history
   PullRequest.cs             → Pull request models + review status
+  WikiPage.cs                → Wiki models (Wiki, WikiPageNode, WikiPageContent, WikiSearchResult)
 
 Components/Pages/
-  Dashboard.razor            → Main UI (3 tabs: Insights / Pipelines / Pull Requests)
+  Dashboard.razor            → Main UI (4 tabs: Insights / Pipelines / Pull Requests / Wiki)
+  WikiPageTreeNode.razor     → Recursive wiki page tree component
 ```
 
 ## AppInsights status computation

@@ -2,6 +2,7 @@ using Azure.Core;
 using AzureWatcher.Models;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace AzureWatcher.Services;
 
@@ -11,6 +12,20 @@ public class AzureDevOpsService(
     IConfiguration config)
 {
     private readonly string _orgUrl = config["AzureDevOps:OrganizationUrl"]?.TrimEnd('/') ?? throw new ArgumentException("AzureDevOps organization URL cannot be null or empty");
+    private readonly string _orgName = ExtractOrgName(config["AzureDevOps:OrganizationUrl"]?.TrimEnd('/') ?? "");
+
+    private static string ExtractOrgName(string orgUrl)
+    {
+        if (string.IsNullOrEmpty(orgUrl)) return "";
+        try
+        {
+            var uri = new Uri(orgUrl);
+            if (uri.Host.EndsWith("visualstudio.com", StringComparison.OrdinalIgnoreCase))
+                return uri.Host.Split('.')[0];
+            return uri.AbsolutePath.Trim('/').Split('/').FirstOrDefault() ?? "";
+        }
+        catch { return ""; }
+    }
 
     // Azure DevOps resource ID for token acquisition
     private static readonly string[] DevOpsScopes = ["499b84ac-1321-427f-aa17-267ca6975798/.default"];
@@ -231,6 +246,215 @@ public class AzureDevOpsService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to fetch PRs for project {Project}", project);
+        }
+        return result;
+    }
+
+    // ── Wiki ──────────────────────────────────────────────────────────────
+
+    public async Task<List<WikiBrowseState>> GetAllWikisAsync(CancellationToken ct = default)
+    {
+        var result = new List<WikiBrowseState>();
+        try
+        {
+            var credential = credentialService.Get();
+            var token = await credential.GetTokenAsync(new TokenRequestContext(DevOpsScopes), ct);
+
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var projects = await GetProjectsAsync(http, ct);
+            var tasks = projects.Select(p => GetProjectWikisAsync(http, p, ct));
+            var all = await Task.WhenAll(tasks);
+            result = all.SelectMany(x => x)
+                        .Select(w => new WikiBrowseState { Wiki = w })
+                        .ToList();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch all wikis");
+        }
+        return result;
+    }
+
+    private async Task<List<Wiki>> GetProjectWikisAsync(HttpClient http, string project, CancellationToken ct)
+    {
+        var result = new List<Wiki>();
+        try
+        {
+            var url = $"{_orgUrl}/{Uri.EscapeDataString(project)}/_apis/wiki/wikis?api-version=7.1";
+            var resp = await http.GetAsync(url, ct);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            foreach (var w in doc.RootElement.GetProperty("value").EnumerateArray())
+            {
+                result.Add(new Wiki
+                {
+                    Id = w.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
+                    Name = w.TryGetProperty("name", out var name) ? name.GetString() ?? "" : "",
+                    Project = project,
+                    Type = w.TryGetProperty("type", out var type) ? type.GetString() ?? "" : "",
+                    RemoteUrl = w.TryGetProperty("remoteUrl", out var remoteUrl) ? remoteUrl.GetString() ?? "" : "",
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch wikis for {Project}", project);
+        }
+        return result;
+    }
+
+    public async Task<List<WikiPageNode>> GetWikiPagesAsync(string project, string wikiId, CancellationToken ct = default)
+    {
+        try
+        {
+            var credential = credentialService.Get();
+            var token = await credential.GetTokenAsync(new TokenRequestContext(DevOpsScopes), ct);
+
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var url = $"{_orgUrl}/{Uri.EscapeDataString(project)}/_apis/wiki/wikis/{Uri.EscapeDataString(wikiId)}/pages" +
+                      $"?path=/&recursionLevel=full&api-version=7.1";
+            var resp = await http.GetAsync(url, ct);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var root = ParseWikiPageNode(doc.RootElement);
+            return root.SubPages.Any() ? root.SubPages : new List<WikiPageNode> { root };
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch wiki pages for {WikiId}", wikiId);
+            return new List<WikiPageNode>();
+        }
+    }
+
+    private static WikiPageNode ParseWikiPageNode(JsonElement element)
+    {
+        var node = new WikiPageNode
+        {
+            Path = element.TryGetProperty("path", out var p) ? p.GetString() ?? "/" : "/",
+            Order = element.TryGetProperty("order", out var o) ? o.GetInt32() : 0,
+        };
+
+        if (element.TryGetProperty("subPages", out var subs) && subs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var sub in subs.EnumerateArray())
+                node.SubPages.Add(ParseWikiPageNode(sub));
+        }
+
+        return node;
+    }
+
+    public async Task<WikiPageContent?> GetWikiPageContentAsync(
+        string project, string wikiId, string wikiName, string pagePath, CancellationToken ct = default)
+    {
+        try
+        {
+            var credential = credentialService.Get();
+            var token = await credential.GetTokenAsync(new TokenRequestContext(DevOpsScopes), ct);
+
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var url = $"{_orgUrl}/{Uri.EscapeDataString(project)}/_apis/wiki/wikis/{Uri.EscapeDataString(wikiId)}/pages" +
+                      $"?path={Uri.EscapeDataString(pagePath)}&includeContent=true&api-version=7.1";
+            var resp = await http.GetAsync(url, ct);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            return new WikiPageContent
+            {
+                Path = pagePath,
+                Content = doc.RootElement.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "",
+                WikiId = wikiId,
+                Project = project,
+                WikiName = wikiName,
+                Url = $"{_orgUrl}/{Uri.EscapeDataString(project)}/_wiki/wikis/{Uri.EscapeDataString(wikiName)}?pagePath={Uri.EscapeDataString(pagePath)}",
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to fetch wiki page content for {Path}", pagePath);
+            return null;
+        }
+    }
+
+    public async Task<List<WikiSearchResult>> SearchWikiAsync(string searchText, CancellationToken ct = default)
+    {
+        var result = new List<WikiSearchResult>();
+        try
+        {
+            var credential = credentialService.Get();
+            var token = await credential.GetTokenAsync(new TokenRequestContext(DevOpsScopes), ct);
+
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            var searchUrl = $"https://almsearch.dev.azure.com/{Uri.EscapeDataString(_orgName)}/_apis/search/wikisearchresults?api-version=7.1-preview.1";
+            var bodyJson = new JsonObject
+            {
+                ["searchText"] = searchText,
+                ["$top"] = 50,
+                ["$skip"] = 0,
+                ["includeFacets"] = false
+            }.ToJsonString();
+
+            var content = new StringContent(bodyJson, System.Text.Encoding.UTF8, "application/json");
+            var resp = await http.PostAsync(searchUrl, content, ct);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (!doc.RootElement.TryGetProperty("results", out var results)) return result;
+
+            foreach (var r in results.EnumerateArray())
+            {
+                string projectName = "";
+                if (r.TryGetProperty("project", out var projEl))
+                    projectName = projEl.TryGetProperty("name", out var pn) ? pn.GetString() ?? "" : "";
+
+                string wikiName = "", wikiId = "";
+                if (r.TryGetProperty("wiki", out var wikiEl))
+                {
+                    wikiName = wikiEl.TryGetProperty("name", out var wn) ? wn.GetString() ?? "" : "";
+                    wikiId = wikiEl.TryGetProperty("id", out var wi) ? wi.GetString() ?? "" : "";
+                }
+
+                var snippets = new List<string>();
+                if (r.TryGetProperty("hits", out var hits))
+                {
+                    foreach (var hit in hits.EnumerateArray())
+                    {
+                        if (hit.TryGetProperty("charContent", out var cc))
+                        {
+                            var snippet = cc.GetString() ?? "";
+                            snippet = snippet.Replace("<c0>", "<mark>").Replace("</c0>", "</mark>");
+                            snippets.Add(snippet);
+                        }
+                    }
+                }
+
+                result.Add(new WikiSearchResult
+                {
+                    FileName = r.TryGetProperty("fileName", out var fn) ? fn.GetString() ?? "" : "",
+                    Path = r.TryGetProperty("path", out var path) ? path.GetString() ?? "" : "",
+                    Project = projectName,
+                    WikiName = wikiName,
+                    WikiId = wikiId,
+                    Snippets = snippets,
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to search wiki");
         }
         return result;
     }
